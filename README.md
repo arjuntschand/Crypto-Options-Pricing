@@ -1,6 +1,6 @@
 # Crypto Options Pricing and Risk Engine
 
-A comprehensive cryptocurrency options pricing and risk analysis engine that fetches live market data from Deribit, prices options using three distinct models, and performs validation, Greeks computation, volatility surface construction, and crash regime stress testing.
+A comprehensive cryptocurrency (Bitcoin and Ethereum) options pricing and risk analysis engine that fetches live market data from Deribit, prices options using three distinct models, and performs validation, Greeks computation, volatility surface construction, and crash regime stress testing.
 
 ## Methodology
 
@@ -45,12 +45,12 @@ A two-factor model where both price and variance follow stochastic processes wit
 | Crypto Crash | 84.88% | 108.22%|
 
 ### Generated Outputs
-- `results/deribit_options_raw.csv` — Raw options chain data
-- `results/btc_historical.csv` / `results/eth_historical.csv` — Historical spot prices
-- `results/validation_full.csv` / `results/validation_summary.csv` — Model validation results
-- `results/greeks_comparison.csv` — Greeks across all three models
-- `results/vol_surface_BTC.png` / `results/vol_surface_ETH.png` — 3D implied volatility surfaces
-- `results/stress_test_results.csv` / `results/stress_test_chart.png` — Crash regime analysis
+- `results/deribit_options_raw.csv` - Raw options chain data
+- `results/btc_historical.csv` / `results/eth_historical.csv` - Historical spot prices
+- `results/validation_full.csv` / `results/validation_summary.csv` - Model validation results
+- `results/greeks_comparison.csv` - Greeks across all three models
+- `results/vol_surface_BTC.png` / `results/vol_surface_ETH.png` - 3D implied volatility surfaces
+- `results/stress_test_results.csv` / `results/stress_test_chart.png` - Crash regime analysis
 
 ## Installation & Usage
 
