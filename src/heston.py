@@ -37,12 +37,14 @@ def heston_mc_price(
     rng = np.random.RandomState(seed)
     dt = T / n_steps
 
-    # Generate correlated Brownian motions
+    # Generate correlated Brownian motions via Cholesky decomposition
     Z1 = rng.standard_normal((n_paths, n_steps))
     Z_indep = rng.standard_normal((n_paths, n_steps))
-    Z2 = rho * Z1 + np.sqrt(1.0 - rho ** 2) * Z_indep
+    rho_complement = np.sqrt(1.0 - rho ** 2)
+    Z2 = rho * Z1 + rho_complement * Z_indep
 
-    # Initialize arrays
+    # Initialize variance and log-price arrays
+    sqrt_dt = np.sqrt(dt)
     v = np.full(n_paths, v0)
     log_S = np.full(n_paths, np.log(S))
 
@@ -50,11 +52,11 @@ def heston_mc_price(
         v_pos = np.maximum(v, 0.0)
         sqrt_v = np.sqrt(v_pos)
 
-        # Update log price
-        log_S += (r - 0.5 * v_pos) * dt + sqrt_v * np.sqrt(dt) * Z1[:, t]
+        # Update log-price
+        log_S += (r - 0.5 * v_pos) * dt + sqrt_v * sqrt_dt * Z1[:, t]
 
-        # Update variance (full truncation)
-        v = v + kappa * (theta - v_pos) * dt + sigma_v * sqrt_v * np.sqrt(dt) * Z2[:, t]
+        # Update variance with full truncation scheme
+        v = v + kappa * (theta - v_pos) * dt + sigma_v * sqrt_v * sqrt_dt * Z2[:, t]
         v = np.maximum(v, 0.0)
 
     S_T = np.exp(log_S)

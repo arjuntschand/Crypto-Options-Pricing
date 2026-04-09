@@ -18,3 +18,5 @@ def timer(func: Callable) -> Callable:
 
 
 RISK_FREE_RATE = 0.05
+SEED = 42
+TRADING_DAYS_PER_YEAR = 252

@@ -1,7 +1,7 @@
 """Monte Carlo GBM option pricing."""
 
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -33,11 +33,10 @@ def monte_carlo_price(
     # Generate all random normals at once (vectorized)
     Z = rng.standard_normal((n_paths, n_steps))
 
-    # Compute log increments
+    # Compute log increments and accumulate
+    sqrt_dt = np.sqrt(dt)
     drift = (r - 0.5 * sigma ** 2) * dt
-    diffusion = sigma * np.sqrt(dt) * Z
-
-    # Cumulative sum of log increments
+    diffusion = sigma * sqrt_dt * Z
     log_paths = np.cumsum(drift + diffusion, axis=1)
     S_T = S * np.exp(log_paths[:, -1])
 

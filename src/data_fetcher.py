@@ -11,9 +11,11 @@ import yfinance as yf
 
 
 DERIBIT_BASE = "https://www.deribit.com/api/v2/public"
+MAX_RETRIES = 3
+RATE_LIMIT_SLEEP = 0.05
 
 
-def _api_call(url: str, params: Dict, max_retries: int = 3) -> Optional[Dict]:
+def _api_call(url: str, params: Dict, max_retries: int = MAX_RETRIES) -> Optional[Dict]:
     """Make a Deribit API call with retries."""
     for attempt in range(max_retries):
         try:
@@ -50,7 +52,7 @@ def fetch_deribit_options(currency: str = "BTC") -> pd.DataFrame:
     for i, inst in enumerate(instruments):
         if (i + 1) % 50 == 0:
             print(f"  Fetched order book for {i + 1}/{len(instruments)} {currency} instruments...")
-        time.sleep(0.05)
+        time.sleep(RATE_LIMIT_SLEEP)
 
         name = inst["instrument_name"]
         book = _api_call(

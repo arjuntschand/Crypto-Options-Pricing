@@ -21,18 +21,14 @@ def black_scholes_price(
     option_type: 'C' for call, 'P' for put
     Returns: option price as float
     """
-    # Edge cases
-    if T <= 0:
-        if option_type == "C":
-            return max(S - K, 0.0)
-        return max(K - S, 0.0)
-    if sigma <= 0:
-        if option_type == "C":
-            return max(S - K, 0.0)
-        return max(K - S, 0.0)
+    # Edge cases: return intrinsic value when inputs are degenerate
+    if T <= 0 or sigma <= 0:
+        intrinsic = max(S - K, 0.0) if option_type == "C" else max(K - S, 0.0)
+        return intrinsic
 
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
+    sqrt_T = np.sqrt(T)
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
 
     if option_type == "C":
         price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
