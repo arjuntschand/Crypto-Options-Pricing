@@ -13,6 +13,7 @@ import yfinance as yf
 DERIBIT_BASE = "https://www.deribit.com/api/v2/public"
 MAX_RETRIES = 3
 RATE_LIMIT_SLEEP = 0.05
+CURRENCIES = ["BTC", "ETH"]
 
 
 def _api_call(url: str, params: Dict, max_retries: int = MAX_RETRIES) -> Optional[Dict]:
@@ -81,7 +82,7 @@ def fetch_deribit_options(currency: str = "BTC") -> pd.DataFrame:
 
         spot = book.get("underlying_price", book.get("index_price", 0))
         mark_price_usd = book.get("mark_price", 0)
-        # Deribit returns mark_price in BTC/ETH, convert to USD
+        # Deribit returns mark_price in BTC/ETH/SOL, convert to USD
         if mark_price_usd and spot:
             mark_price_usd = mark_price_usd * spot
         mark_iv = book.get("mark_iv", 0)
@@ -104,7 +105,7 @@ def fetch_deribit_options(currency: str = "BTC") -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Filter
+    # Filter: only remove < 1 day expiry and zero price/iv
     df = df[df["time_to_expiry_years"] > 1.0 / 365.25].copy()
     df = df[df["mark_price"] > 0].copy()
     df = df[df["mark_iv"] > 0].copy()
@@ -112,20 +113,17 @@ def fetch_deribit_options(currency: str = "BTC") -> pd.DataFrame:
     return df
 
 
-def fetch_historical_prices() -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch historical BTC and ETH daily prices from yfinance."""
-    print("  Fetching BTC-USD historical prices...")
-    btc = yf.download("BTC-USD", start="2019-01-01", end=datetime.now().strftime("%Y-%m-%d"), progress=False)
-    print("  Fetching ETH-USD historical prices...")
-    eth = yf.download("ETH-USD", start="2019-01-01", end=datetime.now().strftime("%Y-%m-%d"), progress=False)
-
-    # Flatten multi-level columns if present
-    if isinstance(btc.columns, pd.MultiIndex):
-        btc.columns = btc.columns.get_level_values(0)
-    if isinstance(eth.columns, pd.MultiIndex):
-        eth.columns = eth.columns.get_level_values(0)
-
-    return btc, eth
+def fetch_historical_prices() -> Dict[str, pd.DataFrame]:
+    """Fetch historical BTC, ETH, and SOL daily prices from yfinance."""
+    tickers = {"BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD"}
+    result = {}
+    for label, ticker in tickers.items():
+        print(f"  Fetching {ticker} historical prices...")
+        df = yf.download(ticker, start="2019-01-01", end=datetime.now().strftime("%Y-%m-%d"), progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        result[label] = df
+    return result
 
 
 def compute_realized_vol(prices_df: pd.DataFrame, window: int = 30) -> pd.Series:
@@ -134,7 +132,7 @@ def compute_realized_vol(prices_df: pd.DataFrame, window: int = 30) -> pd.Series
     return log_returns.rolling(window).std() * np.sqrt(365)
 
 
-def get_crash_volatilities(btc_hist: pd.DataFrame, eth_hist: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+def get_crash_volatilities(hist_prices: Dict[str, pd.DataFrame]) -> Dict[str, Dict[str, float]]:
     """Extract realized volatility for crash windows."""
     crash_windows = {
         "covid_crash": ("2020-02-15", "2020-04-15"),
@@ -143,47 +141,51 @@ def get_crash_volatilities(btc_hist: pd.DataFrame, eth_hist: pd.DataFrame) -> Di
 
     result: Dict[str, Dict[str, float]] = {}
     for regime, (start, end) in crash_windows.items():
-        btc_slice = btc_hist.loc[start:end]
-        eth_slice = eth_hist.loc[start:end]
-        btc_ret = np.log(btc_slice["Close"] / btc_slice["Close"].shift(1)).dropna()
-        eth_ret = np.log(eth_slice["Close"] / eth_slice["Close"].shift(1)).dropna()
-        result[regime] = {
-            "BTC": float(btc_ret.std() * np.sqrt(365)),
-            "ETH": float(eth_ret.std() * np.sqrt(365)),
-        }
+        regime_vols: Dict[str, float] = {}
+        for currency, df in hist_prices.items():
+            try:
+                slc = df.loc[start:end]
+                ret = np.log(slc["Close"] / slc["Close"].shift(1)).dropna()
+                regime_vols[currency] = float(ret.std() * np.sqrt(365))
+            except Exception:
+                regime_vols[currency] = 0.8  # fallback
+        result[regime] = regime_vols
 
     # Normal regime: full history
-    btc_ret_all = np.log(btc_hist["Close"] / btc_hist["Close"].shift(1)).dropna()
-    eth_ret_all = np.log(eth_hist["Close"] / eth_hist["Close"].shift(1)).dropna()
-    result["normal"] = {
-        "BTC": float(btc_ret_all.std() * np.sqrt(365)),
-        "ETH": float(eth_ret_all.std() * np.sqrt(365)),
-    }
+    normal_vols: Dict[str, float] = {}
+    for currency, df in hist_prices.items():
+        ret = np.log(df["Close"] / df["Close"].shift(1)).dropna()
+        normal_vols[currency] = float(ret.std() * np.sqrt(365))
+    result["normal"] = normal_vols
 
     return result
 
 
-def fetch_all_data(results_dir: str = "results") -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
+def fetch_all_data(results_dir: str = "results") -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame], Dict]:
     """Fetch all data and save to CSV."""
-    # Deribit options
-    btc_options = fetch_deribit_options("BTC")
-    eth_options = fetch_deribit_options("ETH")
-    all_options = pd.concat([btc_options, eth_options], ignore_index=True)
+    # Deribit options for all currencies
+    all_dfs = []
+    for currency in CURRENCIES:
+        cdf = fetch_deribit_options(currency)
+        if not cdf.empty:
+            all_dfs.append(cdf)
+        print(f"  {currency} options after filtering: {len(cdf)}")
+
+    all_options = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
     if not all_options.empty:
         all_options.to_csv(f"{results_dir}/deribit_options_raw.csv", index=False)
-    print(f"  Total BTC options after filtering: {len(btc_options)}")
-    print(f"  Total ETH options after filtering: {len(eth_options)}")
 
     # Historical prices
-    btc_hist, eth_hist = fetch_historical_prices()
-    btc_hist.to_csv(f"{results_dir}/btc_historical.csv")
-    eth_hist.to_csv(f"{results_dir}/eth_historical.csv")
+    hist_prices = fetch_historical_prices()
+    for currency, df in hist_prices.items():
+        df.to_csv(f"{results_dir}/{currency.lower()}_historical.csv")
 
     # Crash volatilities
-    crash_vols = get_crash_volatilities(btc_hist, eth_hist)
+    crash_vols = get_crash_volatilities(hist_prices)
     print(f"  Crash volatilities computed:")
     for regime, vols in crash_vols.items():
-        print(f"    {regime}: BTC={vols['BTC']:.4f}, ETH={vols['ETH']:.4f}")
+        parts = [f"{c}={v:.4f}" for c, v in vols.items()]
+        print(f"    {regime}: {', '.join(parts)}")
 
-    return all_options, btc_hist, eth_hist, crash_vols
+    return all_options, hist_prices, crash_vols

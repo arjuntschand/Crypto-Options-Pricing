@@ -7,18 +7,72 @@ import pandas as pd
 
 from src.black_scholes import black_scholes_price
 from src.monte_carlo import monte_carlo_price
-from src.heston import heston_mc_price
+from src.heston import heston_mc_price, get_heston_params_for_option
+
+
+def detect_mispricings(
+    full_df: pd.DataFrame,
+    threshold_pct: float = 15.0,
+    results_dir: str = "results",
+) -> pd.DataFrame:
+    """
+    Flag contracts where the best model price diverges from market by more than threshold_pct.
+    Saves to results/mispricings.csv and returns the flagged DataFrame.
+    """
+    rows = []
+    for _, row in full_df.iterrows():
+        market = row["market_price"]
+        if market <= 0:
+            continue
+        # Use the model with the smallest error for each contract
+        errors = {}
+        for model in ["bs", "mc", "heston"]:
+            pct = row.get(f"{model}_pct_error", np.nan)
+            if not np.isnan(pct):
+                errors[model] = pct
+
+        if not errors:
+            continue
+
+        best_model = min(errors, key=errors.get)
+        best_pct = errors[best_model]
+
+        if best_pct > threshold_pct:
+            rows.append({
+                "instrument": row["instrument"],
+                "currency": row["currency"],
+                "option_type": row["option_type"],
+                "strike": row["strike"],
+                "spot": row["spot"],
+                "moneyness": row["moneyness"],
+                "time_to_expiry": row["time_to_expiry"],
+                "expiry_bucket": row["expiry_bucket"],
+                "market_price": market,
+                "bs_price": row["bs_price"],
+                "mc_price": row["mc_price"],
+                "heston_price": row["heston_price"],
+                "best_model": best_model.upper(),
+                "best_model_pct_error": best_pct,
+                "bs_pct_error": row["bs_pct_error"],
+                "mc_pct_error": row["mc_pct_error"],
+                "heston_pct_error": row["heston_pct_error"],
+            })
+
+    mispricing_df = pd.DataFrame(rows)
+    mispricing_df.to_csv(f"{results_dir}/mispricings.csv", index=False)
+    return mispricing_df
 
 
 def validate_models(
     options_df: pd.DataFrame,
-    heston_params: Dict[str, Dict[str, float]],
+    heston_bucket_params: Dict[str, Dict[str, Dict[str, float]]],
     r: float = 0.05,
     results_dir: str = "results",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
     """
     Validate all three models against market mark prices for every option.
-    Uses pre-computed prices from DataFrame columns if available (bs_price, mc_price, heston_price).
+    Uses pre-computed prices from DataFrame columns if available.
+    heston_bucket_params: {currency: {bucket: {params}}}
     Returns (full_results_df, summary_df, key_metrics).
     """
     has_bs = "bs_price" in options_df.columns
@@ -52,7 +106,7 @@ def validate_models(
         if has_heston and not np.isnan(row.get("heston_price", np.nan)):
             heston_price = row["heston_price"]
         else:
-            h_params = heston_params.get(currency, {})
+            h_params = get_heston_params_for_option(heston_bucket_params, currency, T)
             if h_params:
                 h_res = heston_mc_price(
                     S, K, T, r,
@@ -162,7 +216,7 @@ def validate_models(
                     "max_abs_error": sub[abs_col].max(),
                 })
 
-        # By expiry
+        # By expiry bucket
         for eb in ["short", "medium", "long"]:
             sub = valid[valid["expiry_bucket"] == eb]
             if len(sub) > 0:
@@ -190,6 +244,18 @@ def validate_models(
     )
     best_error = min(bs_mean_pct, mc_mean_pct, heston_mean_pct)
 
+    # MAPE by expiry bucket
+    expiry_mape: Dict[str, Dict[str, float]] = {}
+    for eb in ["short", "medium", "long"]:
+        expiry_mape[eb] = {}
+        sub = full_df[full_df["expiry_bucket"] == eb]
+        for model in ["bs", "mc", "heston"]:
+            col = f"{model}_pct_error"
+            expiry_mape[eb][model.upper()] = sub[col].mean() if len(sub) > 0 else np.nan
+
+    # Heston improvement over BS in normal conditions (overall)
+    heston_improvement_normal = bs_mean_pct - heston_mean_pct
+
     key_metrics = {
         "total_contracts": len(full_df),
         "bs_mean_pct_error": bs_mean_pct,
@@ -197,20 +263,32 @@ def validate_models(
         "heston_mean_pct_error": heston_mean_pct,
         "best_model": best_model,
         "best_accuracy": 100.0 - best_error,
-        "heston_improvement_over_bs": bs_mean_pct - heston_mean_pct,
+        "heston_improvement_over_bs": heston_improvement_normal,
+        "expiry_mape": expiry_mape,
     }
 
     # Print summary
     print("\n  === VALIDATION SUMMARY ===")
     print(f"  Total contracts validated: {len(full_df)}")
+    print(f"\n  Overall MAPE:")
     print(f"  {'Model':<10} {'Mean % Error':>14} {'Median % Error':>16} {'Max Abs Error':>14} {'Count':>6}")
     print(f"  {'-'*62}")
     for model in ["BS", "MC", "HESTON"]:
         row = summary_df[(summary_df["model"] == model) & (summary_df["bucket"] == "all")]
         if len(row) > 0:
-            r = row.iloc[0]
-            print(f"  {model:<10} {r['mean_pct_error']:>13.2f}% {r['median_pct_error']:>15.2f}% {r['max_abs_error']:>14.2f} {int(r['count']):>6}")
+            r_row = row.iloc[0]
+            print(f"  {model:<10} {r_row['mean_pct_error']:>13.2f}% {r_row['median_pct_error']:>15.2f}% {r_row['max_abs_error']:>14.2f} {int(r_row['count']):>6}")
+
+    print(f"\n  MAPE by Expiry Bucket:")
+    print(f"  {'Bucket':<10} {'BS':>10} {'MC':>10} {'Heston':>10}")
+    print(f"  {'-'*42}")
+    for eb in ["short", "medium", "long"]:
+        bs_e = expiry_mape.get(eb, {}).get("BS", np.nan)
+        mc_e = expiry_mape.get(eb, {}).get("MC", np.nan)
+        he_e = expiry_mape.get(eb, {}).get("HESTON", np.nan)
+        print(f"  {eb:<10} {bs_e:>9.2f}% {mc_e:>9.2f}% {he_e:>9.2f}%")
+
     print(f"\n  Best model: {best_model} (accuracy: {key_metrics['best_accuracy']:.2f}%)")
-    print(f"  Heston improvement over BS: {key_metrics['heston_improvement_over_bs']:.2f} percentage points")
+    print(f"  Heston improvement over BS (normal): {heston_improvement_normal:.2f} pp")
 
     return full_df, summary_df, key_metrics

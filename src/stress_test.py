@@ -10,7 +10,7 @@ import pandas as pd
 
 from src.black_scholes import black_scholes_price
 from src.monte_carlo import monte_carlo_price
-from src.heston import heston_mc_price
+from src.heston import heston_mc_price, get_heston_params_for_option
 
 
 def _select_representative_options(options_df: pd.DataFrame, n: int = 20) -> pd.DataFrame:
@@ -50,12 +50,13 @@ def _select_representative_options(options_df: pd.DataFrame, n: int = 20) -> pd.
 def run_stress_test(
     options_df: pd.DataFrame,
     crash_vols: Dict[str, Dict[str, float]],
-    heston_params: Dict[str, Dict[str, float]],
+    heston_bucket_params: Dict[str, Dict[str, Dict[str, float]]],
     r: float = 0.05,
     results_dir: str = "results",
 ) -> pd.DataFrame:
     """
     Run stress tests across normal, COVID crash, and crypto crash regimes.
+    heston_bucket_params: {currency: {bucket: {params}}}
     """
     regimes = ["normal", "covid_crash", "crypto_crash"]
     models = ["BS", "MC", "Heston"]
@@ -71,7 +72,6 @@ def run_stress_test(
             continue
 
         subset = _select_representative_options(cdf, n=20)
-        h_params = heston_params.get(currency, {})
 
         for regime in regimes:
             regime_vol = crash_vols.get(regime, {}).get(currency, 0.8)
@@ -92,6 +92,7 @@ def run_stress_test(
                 mc_price = mc_res["price"]
 
                 # Heston with regime variance
+                h_params = get_heston_params_for_option(heston_bucket_params, currency, T)
                 if h_params:
                     h_res = heston_mc_price(
                         S, K, T, r,
